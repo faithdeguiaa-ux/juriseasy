@@ -324,6 +324,11 @@ function resetWizard() {
   setStepperState(1);
   const fi = document.getElementById('file-input');
   if (fi) fi.value = '';
+  // Reset PDF preview UI: hide viewer, show scanning overlay for next upload
+  const viewer = document.getElementById('pdf-viewer');
+  if (viewer) { viewer.src = 'about:blank'; viewer.classList.add('hidden'); }
+  document.getElementById('pdf-scanning')?.classList.remove('hidden');
+  document.getElementById('pdf-open-tab')?.classList.add('hidden');
 }
 
 function setStepperState(active) {
@@ -371,12 +376,13 @@ async function runUploadAndExtract(file) {
     state.wizard.document = uploadResult.document;
     state.wizard.signedUrl = uploadResult.signedUrl;
 
+    // Swap the scanning overlay for the actual PDF viewer immediately —
+    // the user can SEE the document while OCR is still extracting metadata.
+    showRealPdfPreview(uploadResult.signedUrl);
+
     const extracted = await extractDocumentMetadata(file, uploadResult.path);
     state.wizard.extracted = extracted;
     populateExtractedFields(extracted);
-    document.getElementById('pdf-scanning').classList.add('hidden');
-    document.getElementById('pdf-rendered').classList.remove('hidden');
-    paintPreview(extracted);
     if (extracted._stub) {
       if (extracted._ocrError) {
         toast('OCR error — using sample data. Detail: ' + extracted._ocrError);
@@ -481,13 +487,19 @@ function populateExtractedFields(ex) {
   }
 }
 
-function paintPreview(ex) {
-  setText('prev-title', (ex.document_type || '').toUpperCase());
-  setText('prev-name', (ex.principal || '').toUpperCase());
-  const venueLine = [ex.venue_city, ex.venue_province && `Province of ${ex.venue_province}`].filter(Boolean).join(' · ');
-  setText('prev-venue', venueLine || 'REPUBLIC OF THE PHILIPPINES');
-  setText('prev-summary', ex.summary || '');
-  setText('prev-date', formatLong(ex.jurat_date || ex.notarization_date));
+function showRealPdfPreview(signedUrl) {
+  const scanning = document.getElementById('pdf-scanning');
+  const viewer = document.getElementById('pdf-viewer');
+  const openTab = document.getElementById('pdf-open-tab');
+  if (!signedUrl || !viewer) return;
+  // PDF.js / browser-native PDF embed: pass a hash for nicer defaults.
+  viewer.src = signedUrl + '#view=FitH&toolbar=1';
+  viewer.classList.remove('hidden');
+  scanning?.classList.add('hidden');
+  if (openTab) {
+    openTab.href = signedUrl;
+    openTab.classList.remove('hidden');
+  }
 }
 
 async function handleCommitRegister() {
