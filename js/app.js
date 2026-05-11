@@ -318,7 +318,9 @@ function pillForStatus(status) {
 // 5. NEW NOTARIZATION WIZARD
 // =============================================================
 function resetWizard() {
-  state.wizard = { file: null, document: null, extracted: null, createdEntry: null, signedUrl: null };
+  // Free any active blob URL so the browser doesn't leak memory across uploads
+  if (state.wizard?.blobUrl) { try { URL.revokeObjectURL(state.wizard.blobUrl); } catch {} }
+  state.wizard = { file: null, document: null, extracted: null, createdEntry: null, signedUrl: null, blobUrl: null };
   [1, 2, 3, 4, 5].forEach(n => document.getElementById('wiz-step-' + n)?.classList.add('hidden'));
   document.getElementById('wiz-step-1')?.classList.remove('hidden');
   setStepperState(1);
@@ -365,20 +367,26 @@ async function runUploadAndExtract(file) {
   document.getElementById('wiz-step-1').classList.add('hidden');
   document.getElementById('wiz-step-2').classList.remove('hidden');
   setStepperState(2);
-  document.getElementById('pdf-scanning').classList.remove('hidden');
-  document.getElementById('pdf-rendered').classList.add('hidden');
+  document.getElementById('pdf-scanning')?.classList.remove('hidden');
 
   state.wizard.file = file;
 
+  // Display the actual PDF in the viewer IMMEDIATELY from a blob URL
+  // (no network round-trip, no iframe X-Frame-Options issue).
+  // The user sees their document the moment they hit step 2.
   try {
-    // Upload first so we have the storage path; THEN run OCR against the stored file.
+    const blobUrl = URL.createObjectURL(file);
+    state.wizard.blobUrl = blobUrl;
+    showRealPdfPreview(blobUrl);
+  } catch (e) {
+    console.warn('Local PDF preview failed:', e?.message || e);
+  }
+
+  try {
+    // Upload to storage in the background; THEN run OCR against the stored file.
     const uploadResult = await uploadPdf(file);
     state.wizard.document = uploadResult.document;
     state.wizard.signedUrl = uploadResult.signedUrl;
-
-    // Swap the scanning overlay for the actual PDF viewer immediately —
-    // the user can SEE the document while OCR is still extracting metadata.
-    showRealPdfPreview(uploadResult.signedUrl);
 
     const extracted = await extractDocumentMetadata(file, uploadResult.path);
     state.wizard.extracted = extracted;
@@ -487,17 +495,19 @@ function populateExtractedFields(ex) {
   }
 }
 
-function showRealPdfPreview(signedUrl) {
+function showRealPdfPreview(url) {
   const scanning = document.getElementById('pdf-scanning');
   const viewer = document.getElementById('pdf-viewer');
   const openTab = document.getElementById('pdf-open-tab');
-  if (!signedUrl || !viewer) return;
-  // PDF.js / browser-native PDF embed: pass a hash for nicer defaults.
-  viewer.src = signedUrl + '#view=FitH&toolbar=1';
+  if (!url || !viewer) return;
+  // Use the URL directly (blob: URLs bypass CORS/X-Frame-Options entirely;
+  // signed Supabase URLs also work for cross-origin embeds in modern browsers).
+  // PDF hash fragment requests a fit-width view with toolbar visible.
+  viewer.src = url + (url.includes('#') ? '' : '#view=FitH&toolbar=1');
   viewer.classList.remove('hidden');
   scanning?.classList.add('hidden');
   if (openTab) {
-    openTab.href = signedUrl;
+    openTab.href = url;
     openTab.classList.remove('hidden');
   }
 }
