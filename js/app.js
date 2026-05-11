@@ -202,14 +202,9 @@ function showScreen(s) {
 }
 
 function setView(view) {
-  // Gate notarial actions behind verification
-  const isProtected = view === 'new';
-  const status = state.profile?.verification_status || 'unverified';
-  if (isProtected && status !== 'verified') {
-    toast('Verify your notarial commission first to unlock notarial actions.');
-    openVerificationView();
-    return;
-  }
+  // BETA: verification gate is OFF — direct wizard access for all signed-in users.
+  // The gate logic and verification flow remain in code (and DB) for re-enable
+  // at production launch alongside paid tiers + admin review queue.
 
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   const target = document.getElementById('view-' + view);
@@ -1014,8 +1009,11 @@ function renderSettings() {
 }
 
 function renderVerificationStatusCard() {
+  // BETA: verification card hidden completely. Function kept for future re-enable.
   const card = document.getElementById('verification-status-card');
-  if (!card) return;
+  if (card) card.classList.add('hidden');
+  return;
+  /* eslint-disable */
   const p = state.profile || {};
   const status = p.verification_status || 'unverified';
   const icon = document.getElementById('verif-icon');
