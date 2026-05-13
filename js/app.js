@@ -7,7 +7,7 @@ import {
   getCurrentUser, getCurrentProfile, updateProfile
 } from './auth.js';
 import { uploadPdf, getSignedUrl } from './storage.js';
-import { listEntries, createEntry, getEntryStats } from './register.js';
+import { listEntries, createEntry, getEntryStats, previewNextEntry } from './register.js';
 import { queueEmails, listQueue, countQueued, sendOne, sendAllQueued } from './emailQueue.js';
 import { extractDocumentMetadata } from './ocr.js';
 import { logAudit, listAuditLogs } from './audit.js';
@@ -676,6 +676,47 @@ function goToStep(n) {
   [1, 2, 3, 4, 5].forEach(i => document.getElementById('wiz-step-' + i)?.classList.add('hidden'));
   document.getElementById('wiz-step-' + n)?.classList.remove('hidden');
   setStepperState(n);
+  if (n === 3) populateStep3Preview();
+}
+
+async function populateStep3Preview() {
+  const ex = state.wizard.extracted;
+  if (!ex) return;
+  // Pull the most-recently-edited values from step 2 so the preview reflects
+  // any corrections the user just made.
+  const docType = readVal('ext-type', ex.document_type || '');
+  const notarialAct = readVal('ext-act', ex.notarial_act || '');
+  const noteDate = readVal('ext-date', ex.jurat_date || ex.notarization_date || '');
+  const fee = Number(readVal('ext-fee', ex.fee || 0));
+  const affNames = Array.from(document.querySelectorAll('[data-affiant-name]'))
+    .map(el => el.value.trim()).filter(Boolean);
+  const principal = affNames.length > 0 ? affNames.join(' / ') : (ex.principal || '');
+
+  // Show what we already know immediately, then await the counter lookup.
+  setText('reg-date', noteDate || '—');
+  setText('reg-principal', principal || '—');
+  setText('reg-type', docType || '—');
+  setText('reg-fee-display', '₱' + (Number.isFinite(fee) ? fee.toFixed(2) : '0.00'));
+
+  try {
+    const preview = await previewNextEntry({
+      document_type: docType,
+      notarization_date: noteDate,
+      principal
+    });
+    setText('reg-doc', String(preview.doc_no).padStart(3, '0'));
+    setText('reg-page', preview.page_no);
+    setText('reg-book', preview.book_no);
+    setText('reg-series', preview.series_year);
+    setText('filename-preview', preview.filename);
+  } catch (e) {
+    console.warn('[wizard] step 3 preview failed:', e?.message || e);
+    setText('reg-doc', '—');
+    setText('reg-page', '—');
+    setText('reg-book', '—');
+    setText('reg-series', '—');
+    setText('filename-preview', '(preview unavailable — Log to Register will still work)');
+  }
 }
 
 // =============================================================

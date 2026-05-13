@@ -140,6 +140,48 @@ export async function createEntry(input) {
   return created;
 }
 
+/**
+ * Compute what the NEXT register entry's identifiers and filename will look
+ * like, without inserting anything. Used by the wizard's step-3 preview so
+ * the lawyer sees Doc No./Page/Book/filename before clicking "Log to Register".
+ */
+export async function previewNextEntry(input) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { data: profile, error: pErr } = await supabase
+    .from('lawyers')
+    .select('current_book_no, current_doc_no, current_page_no, series_year, filename_pattern')
+    .eq('id', user.id)
+    .single();
+  if (pErr) throw pErr;
+
+  const nextDocNo  = (profile.current_doc_no || 0) + 1;
+  const nextPageNo = profile.current_page_no || 1;
+  const bookNo     = profile.current_book_no || 'I';
+  const seriesYear = profile.series_year     || new Date().getFullYear();
+  const pattern    = profile.filename_pattern ||
+    '{date}_{type}_{principal}_Doc-{doc_no}_Page-{page}_Book{book}_{year}.pdf';
+
+  const filename = generateFilename(pattern, {
+    date: input.notarization_date,
+    type: tokenize(input.document_type),
+    principal: tokenize(firstPrincipal(input.principal)),
+    doc_no: String(nextDocNo).padStart(3, '0'),
+    page: nextPageNo,
+    book: bookNo,
+    year: seriesYear
+  });
+
+  return {
+    doc_no: nextDocNo,
+    page_no: nextPageNo,
+    book_no: bookNo,
+    series_year: seriesYear,
+    filename
+  };
+}
+
 export async function getEntryStats() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
