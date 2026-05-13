@@ -187,6 +187,22 @@ export async function previewNextEntry(input) {
   };
 }
 
+/**
+ * Delete a register entry. The unique-sequence constraint stays intact —
+ * callers can re-use the freed Doc No. on the next entry by overriding it.
+ */
+export async function deleteEntry(id) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+  const { error } = await supabase
+    .from('register_entries')
+    .delete()
+    .eq('id', id)
+    .eq('lawyer_id', user.id);
+  if (error) throw error;
+  await logAudit('register_entry_deleted', { id }, { type: 'register_entry', id });
+}
+
 export async function getEntryStats() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;

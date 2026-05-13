@@ -7,8 +7,8 @@ import {
   getCurrentUser, getCurrentProfile, updateProfile
 } from './auth.js';
 import { uploadPdf, getSignedUrl } from './storage.js';
-import { listEntries, createEntry, getEntryStats, previewNextEntry } from './register.js';
-import { queueEmails, listQueue, countQueued, sendOne, sendAllQueued } from './emailQueue.js';
+import { listEntries, createEntry, getEntryStats, previewNextEntry, deleteEntry } from './register.js';
+import { queueEmails, listQueue, countQueued, sendOne, sendAllQueued, updateQueued, deleteEmail } from './emailQueue.js';
 import { extractDocumentMetadata } from './ocr.js';
 import { logAudit, listAuditLogs } from './audit.js';
 import { generateMonthlyReport } from './reports.js';
@@ -120,6 +120,19 @@ function bindStaticHandlers() {
   // DPA / data
   on('btn-data-export', 'click', handleDataExport);
   on('btn-account-delete', 'click', handleAccountDeleteRequest);
+
+  // Email edit modal
+  on('btn-email-edit-close', 'click', closeEmailEditModal);
+  on('btn-email-edit-cancel', 'click', closeEmailEditModal);
+  on('btn-email-edit-save', 'click', handleEmailEditSave);
+
+  // Viewport switcher (bottom-left)
+  document.querySelectorAll('[data-viewport]').forEach(btn => {
+    btn.addEventListener('click', () => setViewport(btn.dataset.viewport));
+  });
+  // Restore previously chosen viewport from localStorage
+  const saved = localStorage.getItem('notaripro:viewport') || 'app';
+  setViewport(saved);
 }
 
 function on(id, evt, fn) {
@@ -819,7 +832,7 @@ async function renderRegister() {
       tableEl?.classList.remove('hidden');
       empty?.classList.add('hidden');
       tbody.innerHTML = visible.map(r => `
-        <tr class="hover:bg-violet-50 transition">
+        <tr class="hover:bg-violet-50 transition group">
           <td class="px-4 py-3 mono text-xs text-violet-700 font-semibold">${r.series_year}-${pad3(r.doc_no)}</td>
           <td class="px-4 py-3 text-ink-600">${formatShort(r.notarization_date)}</td>
           <td class="px-4 py-3">${escapeHtml(r.document_type || '')}</td>
@@ -827,9 +840,21 @@ async function renderRegister() {
           <td class="px-4 py-3 text-ink-700">${escapeHtml(r.principal)}</td>
           <td class="px-4 py-3 text-ink-500">${r.page_no}</td>
           <td class="px-4 py-3">${pillForStatus(r.status)}</td>
-          <td class="px-4 py-3 text-right"><span class="text-xs text-ink-500">${escapeHtml(r.book_no)} · ${r.series_year}</span></td>
+          <td class="px-4 py-3 text-right">
+            <div class="inline-flex items-center gap-2">
+              <span class="text-xs text-ink-500">${escapeHtml(r.book_no)} · ${r.series_year}</span>
+              <button data-delete-entry="${r.id}" data-entry-label="${escapeAttr(`${r.series_year}-${pad3(r.doc_no)} · ${r.document_type || ''}`)}" class="opacity-0 group-hover:opacity-100 transition text-rose-600 hover:text-rose-700 p-1" title="Delete entry">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+              </button>
+            </div>
+          </td>
         </tr>
       `).join('');
+
+      // Wire delete buttons
+      tbody.querySelectorAll('[data-delete-entry]').forEach(btn => {
+        btn.addEventListener('click', () => handleDeleteEntry(btn.dataset.deleteEntry, btn.dataset.entryLabel));
+      });
       if (countEl) {
         const total = rows.length;
         countEl.textContent = visible.length < total
@@ -945,13 +970,23 @@ async function renderOutbox() {
             <div class="text-xs text-ink-400 mt-0.5">${new Date(e.created_at).toLocaleString()}${e.scheduled_send_time ? ' · scheduled ' + new Date(e.scheduled_send_time).toLocaleString() : ''}</div>
             <details class="mt-3"><summary class="text-xs text-ink-600 hover:text-ink-900 cursor-pointer">View body</summary><pre class="text-xs text-ink-700 mt-2 bg-ink-50 p-3 rounded-lg whitespace-pre-wrap font-sans">${escapeHtml(e.body)}</pre></details>
           </div>
-          ${isQueued ? `<button data-send-now="${e.id}" class="border border-ink-200 hover:border-violet-400 hover:bg-violet-50 text-xs px-3 py-1.5 rounded-lg font-medium shrink-0">Send now</button>` : ''}
+          <div class="flex flex-col items-end gap-1 shrink-0">
+            ${isQueued ? `<button data-send-now="${e.id}" class="border border-ink-200 hover:border-violet-400 hover:bg-violet-50 text-xs px-3 py-1.5 rounded-lg font-medium">Send now</button>` : ''}
+            ${isQueued ? `<button data-edit-email="${e.id}" class="text-xs text-ink-600 hover:text-violet-700 px-3 py-1 rounded-lg font-medium">Edit</button>` : ''}
+            <button data-delete-email="${e.id}" data-email-subject="${escapeAttr(e.subject)}" class="text-xs text-rose-600 hover:text-rose-700 px-3 py-1 rounded-lg font-medium">Delete</button>
+          </div>
         </div>
       `;
     }).join('');
 
     wrap.querySelectorAll('[data-send-now]').forEach(b => {
       b.addEventListener('click', () => handleSendOne(b.dataset.sendNow));
+    });
+    wrap.querySelectorAll('[data-edit-email]').forEach(b => {
+      b.addEventListener('click', () => openEmailEditModal(b.dataset.editEmail));
+    });
+    wrap.querySelectorAll('[data-delete-email]').forEach(b => {
+      b.addEventListener('click', () => handleDeleteEmail(b.dataset.deleteEmail, b.dataset.emailSubject));
     });
   } catch (e) {
     wrap.innerHTML = `<div class="text-rose-600 p-4">Failed to load outbox: ${escapeHtml(e.message || '')}</div>`;
@@ -1566,6 +1601,111 @@ async function handleMfaDisable() {
   } catch (e) {
     toast('Disable failed: ' + (e.message || e));
   }
+}
+
+// =============================================================
+// 16. DELETE / EDIT (register entries + outbox emails)
+// =============================================================
+async function handleDeleteEntry(id, label) {
+  if (!confirm(`Delete register entry ${label}?\n\nThis cannot be undone. The Doc No. will be skipped in your sequence unless you manually re-use it on the next entry.`)) return;
+  try {
+    await deleteEntry(id);
+    toast('Register entry deleted.');
+    await renderRegister();
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || e));
+  }
+}
+
+async function handleDeleteEmail(id, subject) {
+  if (!confirm(`Delete email "${subject || 'this message'}"?\n\nThis removes it from your outbox.`)) return;
+  try {
+    await deleteEmail(id);
+    toast('Email deleted.');
+    await renderOutbox();
+    updateOutboxBadge(await countQueued());
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || e));
+  }
+}
+
+let emailEditCtx = null;
+function openEmailEditModal(id) {
+  const row = (state.cache.outboxRows || []).find(r => r.id === id);
+  if (!row) { toast('Email not found in current view.'); return; }
+  if (row.status !== 'queued') { toast('Only queued emails can be edited.'); return; }
+  emailEditCtx = { id };
+  setVal('em-recipient', row.recipient || '');
+  setVal('em-cc', row.cc || '');
+  setVal('em-subject', row.subject || '');
+  setVal('em-body', row.body || '');
+  setText('em-error', '');
+  document.getElementById('email-edit-modal')?.classList.remove('hidden');
+}
+
+function closeEmailEditModal() {
+  emailEditCtx = null;
+  document.getElementById('email-edit-modal')?.classList.add('hidden');
+}
+
+async function handleEmailEditSave() {
+  if (!emailEditCtx) return;
+  const recipient = readVal('em-recipient', '').trim();
+  const subject = readVal('em-subject', '').trim();
+  const body = readVal('em-body', '');
+  const cc = readVal('em-cc', '').trim() || null;
+  const errEl = document.getElementById('em-error');
+  if (!recipient || !subject || !body) {
+    if (errEl) errEl.textContent = 'Recipient, subject, and body are required.';
+    return;
+  }
+  const btn = document.getElementById('btn-email-edit-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await updateQueued(emailEditCtx.id, { recipient, subject, body, cc });
+    toast('Email updated.');
+    closeEmailEditModal();
+    await renderOutbox();
+  } catch (e) {
+    if (errEl) errEl.textContent = 'Save failed: ' + (e.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save changes';
+  }
+}
+
+// =============================================================
+// 17. VIEWPORT SWITCHER (bottom-left)
+// =============================================================
+function setViewport(mode) {
+  const root = document.documentElement;
+  // Modes: app (default fluid), mobile (~414px), browser (1280px max)
+  root.dataset.viewport = mode;
+  const styleId = 'viewport-style';
+  let style = document.getElementById(styleId);
+  if (!style) { style = document.createElement('style'); style.id = styleId; document.head.appendChild(style); }
+  if (mode === 'mobile') {
+    style.textContent = `
+      #screen-app, #screen-login { max-width: 414px; margin: 0 auto; box-shadow: 0 0 0 1px #d8d8e5, 0 30px 80px rgba(26,15,79,0.15); border-radius: 24px; overflow: hidden; min-height: 800px; }
+      body { background: linear-gradient(180deg, #eeeef5 0%, #d8d8e5 100%); padding: 32px 0; }
+      aside.w-64 { width: 0 !important; display: none !important; }
+      main.flex-1 { padding: 0 !important; }
+      .grid-cols-4, .grid-cols-3, .grid-cols-2 { grid-template-columns: 1fr !important; }
+      .grid-cols-5 { grid-template-columns: 1fr !important; }
+      .col-span-2, .col-span-3 { grid-column: span 1 !important; }
+    `;
+  } else if (mode === 'browser') {
+    style.textContent = `
+      #screen-app, #screen-login { max-width: 1280px; margin: 0 auto; }
+    `;
+  } else {
+    // app (default) — clear overrides
+    style.textContent = '';
+  }
+  // Highlight the active button
+  document.querySelectorAll('[data-viewport]').forEach(b => {
+    b.classList.toggle('vp-active', b.dataset.viewport === mode);
+  });
+  try { localStorage.setItem('notaripro:viewport', mode); } catch {}
 }
 
 // =============================================================
