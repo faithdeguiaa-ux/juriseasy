@@ -69,10 +69,15 @@ export async function createEntry(input) {
     .single();
   if (pErr) throw pErr;
 
-  const nextDocNo  = (profile.current_doc_no || 0) + 1;
-  const nextPageNo = profile.current_page_no  || 1;
-  const bookNo     = profile.current_book_no  || 'I';
-  const seriesYear = profile.series_year      || new Date().getFullYear();
+  // Honor manual overrides from the wizard step-3 editable preview, otherwise
+  // fall back to the lawyer's auto-incrementing counters.
+  const overrideDoc = Number(input.override_doc_no);
+  const overridePage = Number(input.override_page_no);
+  const overrideYear = Number(input.override_series_year);
+  const nextDocNo  = Number.isFinite(overrideDoc) && overrideDoc > 0 ? overrideDoc : (profile.current_doc_no || 0) + 1;
+  const nextPageNo = Number.isFinite(overridePage) && overridePage > 0 ? overridePage : (profile.current_page_no || 1);
+  const bookNo     = (input.override_book_no || '').trim() || profile.current_book_no || 'I';
+  const seriesYear = Number.isFinite(overrideYear) && overrideYear > 1900 ? overrideYear : (profile.series_year || new Date().getFullYear());
   const pattern    = profile.filename_pattern ||
     '{date}_{type}_{principal}_Doc-{doc_no}_Page-{page}_Book{book}_{year}.pdf';
 

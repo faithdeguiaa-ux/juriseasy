@@ -527,10 +527,16 @@ async function handleCommitRegister() {
     ex.cc_emails = affEmails.slice(1).filter(Boolean);
   }
 
-  ex.document_type = readVal('ext-type', ex.document_type);
-  ex.notarial_act = readVal('ext-act', ex.notarial_act);
+  // Step 3 editable inputs win over step 2 for the fields the user can override there.
+  ex.document_type = readVal('reg-type-input', readVal('ext-type', ex.document_type));
+  ex.notarial_act = readVal('reg-act-input', readVal('ext-act', ex.notarial_act));
   ex.summary = readVal('ext-summary', ex.summary || '');
-  ex.fee = Number(readVal('ext-fee', ex.fee));
+  ex.fee = Number(readVal('reg-fee-input', readVal('ext-fee', ex.fee)));
+  // Date + principal may have been edited in step 3 — take those if non-empty
+  const step3Date = readVal('reg-date-input', '');
+  const step3Principal = readVal('reg-principal-input', '');
+  if (step3Date) { ex.jurat_date = step3Date; ex.notarization_date = step3Date; }
+  if (step3Principal) ex.principal = step3Principal;
   ex.principal_address = readVal('ext-principal-address', ex.principal_address || '');
   ex.principal_civil_status = readVal('ext-civil-status', ex.principal_civil_status || '');
   ex.principal_profession = readVal('ext-profession', ex.principal_profession || '');
@@ -554,6 +560,11 @@ async function handleCommitRegister() {
       notarization_date: ex.notarization_date,
       fee: ex.fee,
       document_id: state.wizard.document?.id || null,
+      // Optional manual overrides from step 3 editable inputs
+      override_doc_no: readVal('reg-doc-input', '').trim() || null,
+      override_page_no: readVal('reg-page-input', '').trim() || null,
+      override_book_no: readVal('reg-book-input', '').trim() || null,
+      override_series_year: readVal('reg-series-input', '').trim() || null,
       // rich metadata
       summary: ex.summary,
       principal_address: ex.principal_address,
@@ -685,18 +696,19 @@ async function populateStep3Preview() {
   // Pull the most-recently-edited values from step 2 so the preview reflects
   // any corrections the user just made.
   const docType = readVal('ext-type', ex.document_type || '');
-  const notarialAct = readVal('ext-act', ex.notarial_act || '');
+  const notarialAct = readVal('ext-act', ex.notarial_act || ex.notarial_act || 'Jurat');
   const noteDate = readVal('ext-date', ex.jurat_date || ex.notarization_date || '');
   const fee = Number(readVal('ext-fee', ex.fee || 0));
   const affNames = Array.from(document.querySelectorAll('[data-affiant-name]'))
     .map(el => el.value.trim()).filter(Boolean);
   const principal = affNames.length > 0 ? affNames.join(' / ') : (ex.principal || '');
 
-  // Show what we already know immediately, then await the counter lookup.
-  setText('reg-date', noteDate || '—');
-  setText('reg-principal', principal || '—');
-  setText('reg-type', docType || '—');
-  setText('reg-fee-display', '₱' + (Number.isFinite(fee) ? fee.toFixed(2) : '0.00'));
+  // Pre-populate the editable inputs with what we already know.
+  setVal('reg-date-input', noteDate);
+  setVal('reg-principal-input', principal);
+  setVal('reg-type-input', docType);
+  setVal('reg-act-input', notarialAct);
+  setVal('reg-fee-input', Number.isFinite(fee) ? fee.toFixed(2) : '0.00');
 
   try {
     const preview = await previewNextEntry({
@@ -704,20 +716,61 @@ async function populateStep3Preview() {
       notarization_date: noteDate,
       principal
     });
-    setText('reg-doc', String(preview.doc_no).padStart(3, '0'));
-    setText('reg-page', preview.page_no);
-    setText('reg-book', preview.book_no);
-    setText('reg-series', preview.series_year);
+    state.wizard.previewedCounters = preview;
+    setVal('reg-doc-input', String(preview.doc_no).padStart(3, '0'));
+    setVal('reg-page-input', preview.page_no);
+    setVal('reg-book-input', preview.book_no);
+    setVal('reg-series-input', preview.series_year);
     setText('filename-preview', preview.filename);
   } catch (e) {
     console.warn('[wizard] step 3 preview failed:', e?.message || e);
-    setText('reg-doc', '—');
-    setText('reg-page', '—');
-    setText('reg-book', '—');
-    setText('reg-series', '—');
+    setVal('reg-doc-input', '');
+    setVal('reg-page-input', '');
+    setVal('reg-book-input', '');
+    setVal('reg-series-input', '');
     setText('filename-preview', '(preview unavailable — Log to Register will still work)');
   }
+
+  // Wire live filename regeneration: re-run as user edits any contributing field.
+  wireStep3LiveFilename();
 }
+
+function wireStep3LiveFilename() {
+  const ids = ['reg-doc-input','reg-page-input','reg-book-input','reg-series-input',
+               'reg-date-input','reg-principal-input','reg-type-input'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el._filenameWired) return;
+    el._filenameWired = true;
+    el.addEventListener('input', regenStep3Filename);
+  });
+}
+
+function regenStep3Filename() {
+  const profile = state.profile || {};
+  const pattern = profile.filename_pattern ||
+    '{date}_{type}_{principal}_Doc-{doc_no}_Page-{page}_Book{book}_{year}.pdf';
+  const tokens = {
+    date: readVal('reg-date-input', ''),
+    type: tokenize(readVal('reg-type-input', '')),
+    principal: tokenize(firstPrincipalName(readVal('reg-principal-input', ''))),
+    doc_no: String(readVal('reg-doc-input', '')).padStart(3, '0'),
+    page: readVal('reg-page-input', ''),
+    book: readVal('reg-book-input', ''),
+    year: readVal('reg-series-input', '')
+  };
+  let out = pattern;
+  for (const [k, v] of Object.entries(tokens)) {
+    out = out.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+  }
+  setText('filename-preview', out);
+}
+
+function tokenize(s) {
+  return (s || '').replace(/[^A-Za-z0-9\s]/g, '').split(/\s+/).filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1)).join('');
+}
+function firstPrincipalName(s) { return (s || '').split('/')[0].trim(); }
 
 // =============================================================
 // 6. REGISTER VIEW

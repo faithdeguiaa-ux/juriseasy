@@ -79,6 +79,18 @@
   details > summary { list-style: none; cursor: pointer; }
   details > summary::-webkit-details-marker { display: none; }
 
+  /* Editable register-preview inputs (step 3 of the wizard) */
+  .reg-input {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 8px;
+    outline: none;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .reg-input:hover { background: rgba(255,255,255,0.6); border-color: #cab1ee; }
+  .reg-input:focus { background: #ffffff; border-color: #8a5fd5; box-shadow: 0 0 0 3px rgba(170,134,226,0.25); }
+
   /* Audit log badges */
   .evt-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
   .evt-notarize { background:#dbeafe; color:#1e40af; }
@@ -251,7 +263,7 @@
         <!-- Big primary action -->
         <button data-view="new" class="w-full bg-violet-600 hover:bg-violet-700 text-white text-base font-semibold px-6 py-5 rounded-2xl mb-8 transition flex items-center justify-center gap-3 shadow-lg shadow-violet-200">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          + New Notarization
+          New Notarization
         </button>
 
         <!-- KPIs (Notarized today is accent-filled) -->
@@ -572,20 +584,41 @@
 
           <div class="grid grid-cols-2 gap-6">
             <div class="bg-violet-50 rounded-lg p-5 border border-violet-100">
-              <div class="text-xs uppercase tracking-wider text-violet-700 mb-3 font-semibold">Notarial Register Entry (preview)</div>
+              <div class="flex items-center justify-between mb-3">
+                <div class="text-xs uppercase tracking-wider text-violet-700 font-semibold">Notarial Register Entry</div>
+                <span class="text-[10px] text-violet-700 bg-violet-100 px-2 py-0.5 rounded">All fields editable</span>
+              </div>
               <table class="w-full text-sm">
                 <tbody class="divide-y divide-violet-100">
-                  <tr><td class="py-2 text-ink-500">Document No.</td><td class="py-2 text-right font-medium text-violet-700" id="reg-doc">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Page No.</td><td class="py-2 text-right font-medium" id="reg-page">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Book No.</td><td class="py-2 text-right font-medium" id="reg-book">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Series of</td><td class="py-2 text-right font-medium" id="reg-series">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Date</td><td class="py-2 text-right font-medium" id="reg-date">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Principal</td><td class="py-2 text-right font-medium" id="reg-principal">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Document Type</td><td class="py-2 text-right font-medium" id="reg-type">—</td></tr>
-                  <tr><td class="py-2 text-ink-500">Notarial Fee</td><td class="py-2 text-right font-medium" id="reg-fee-display">—</td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle w-40">Document No.</td>
+                    <td class="py-1.5"><input id="reg-doc-input" class="reg-input w-24 text-right font-semibold text-violet-700 mono" placeholder="—"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Page No.</td>
+                    <td class="py-1.5"><input id="reg-page-input" class="reg-input w-24 text-right font-medium" placeholder="—"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Book No.</td>
+                    <td class="py-1.5"><input id="reg-book-input" class="reg-input w-24 text-right font-medium" placeholder="I"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Series of</td>
+                    <td class="py-1.5"><input id="reg-series-input" class="reg-input w-24 text-right font-medium" placeholder="—"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Date</td>
+                    <td class="py-1.5"><input id="reg-date-input" type="date" class="reg-input w-full text-right font-medium"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Principal</td>
+                    <td class="py-1.5"><input id="reg-principal-input" class="reg-input w-full text-right font-medium" placeholder="Principal name"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Document Title</td>
+                    <td class="py-1.5"><input id="reg-type-input" class="reg-input w-full text-right font-medium" placeholder="Document title"></td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Notarial Act</td>
+                    <td class="py-1.5">
+                      <select id="reg-act-input" class="reg-input w-full text-right font-medium bg-white">
+                        <option>Jurat</option>
+                        <option>Acknowledgment</option>
+                        <option>Oath / Affirmation</option>
+                        <option>Copy Certification</option>
+                        <option>Signature Witnessing</option>
+                      </select>
+                    </td></tr>
+                  <tr><td class="py-1.5 text-ink-600 align-middle">Notarial Fee (₱)</td>
+                    <td class="py-1.5"><input id="reg-fee-input" type="number" step="0.01" min="0" class="reg-input w-32 text-right font-medium" placeholder="0.00"></td></tr>
                 </tbody>
               </table>
-              <p class="text-xs text-ink-500 mt-3">Finalized only after you click <strong>Log to Register</strong> below.</p>
+              <p class="text-xs text-ink-500 mt-3">Edit anything that needs to change. Filename below updates as you type. Finalized only after you click <strong>Log to Register</strong>.</p>
             </div>
 
             <div>
