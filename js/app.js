@@ -8,7 +8,7 @@ import {
 } from './auth.js';
 import { uploadPdf, getSignedUrl } from './storage.js';
 import { listEntries, createEntry, getEntryStats, previewNextEntry, deleteEntry } from './register.js';
-import { queueEmails, listQueue, countQueued, sendOne, sendAllQueued, updateQueued, deleteEmail } from './emailQueue.js';
+import { queueEmail, queueEmails, listQueue, countQueued, sendOne, sendAllQueued, updateQueued, deleteEmail } from './emailQueue.js';
 import { extractDocumentMetadata } from './ocr.js';
 import { logAudit, listAuditLogs } from './audit.js';
 import { generateMonthlyReport } from './reports.js';
@@ -165,8 +165,20 @@ async function handleLogin() {
   }
 }
 
+// Strip any honorific the user typed ("Atty.", "Attorney", "Hon.") so the
+// stored full_name is just the name. Display code re-adds "Atty." consistently.
+function stripHonorific(name) {
+  return (name || '').replace(/^\s*(Atty\.?|Attorney|Hon\.?)\s+/i, '').trim();
+}
+
+// Canonical display name: always "Atty. <name>".
+function attyName(profile) {
+  const n = stripHonorific(profile?.full_name || '');
+  return n ? `Atty. ${n}` : (profile?.email || '');
+}
+
 async function handleSignup() {
-  const fullName = document.getElementById('signup-name').value.trim();
+  const fullName = stripHonorific(document.getElementById('signup-name').value.trim());
   const email = document.getElementById('signup-email').value.trim();
   const password = document.getElementById('signup-password').value;
   const dpaConsent = document.getElementById('signup-dpa-consent')?.checked || false;
@@ -238,9 +250,9 @@ function setView(view) {
 
 function renderProfileChrome() {
   const p = state.profile || {};
-  const initials = (p.full_name || p.email || '?').split(' ').filter(Boolean).map(s => s[0]).slice(0,2).join('').toUpperCase();
+  const initials = (stripHonorific(p.full_name) || p.email || '?').split(' ').filter(Boolean).map(s => s[0]).slice(0,2).join('').toUpperCase();
   setText('profile-initials', initials || '—');
-  setText('profile-name', p.full_name || p.email || '');
+  setText('profile-name', attyName(p));
   setText('profile-meta', 'Notary Public');
 
   // Dashboard avatar — the big circle next to the greeting
@@ -442,7 +454,8 @@ function populateExtractedFields(ex) {
   setVal('ext-principal-address', ex.principal_address || '');
   setVal('ext-civil-status', ex.principal_civil_status || '');
   setVal('ext-profession', ex.principal_profession || '');
-  setVal('ext-ibp-roll', ex.ibp_roll_number || '');
+  // IBP Roll No. is no longer an editable field — the OCR-extracted value
+  // (ex.ibp_roll_number) flows straight through to the register entry + audit log.
   setVal('ext-identity', ex.identity_reference || '');
 
   // Organization (auto-expand if any data present)
@@ -553,7 +566,7 @@ async function handleCommitRegister() {
   ex.principal_address = readVal('ext-principal-address', ex.principal_address || '');
   ex.principal_civil_status = readVal('ext-civil-status', ex.principal_civil_status || '');
   ex.principal_profession = readVal('ext-profession', ex.principal_profession || '');
-  ex.ibp_roll_number = readVal('ext-ibp-roll', ex.ibp_roll_number || '');
+  // ex.ibp_roll_number keeps whatever OCR extracted — no editable field for it.
   ex.identity_reference = readVal('ext-identity', ex.identity_reference || '');
   ex.organization_name = readVal('ext-org-name', ex.organization_name || '');
   ex.organization_address = readVal('ext-org-address', ex.organization_address || '');
@@ -622,21 +635,14 @@ function paintDispatchEmails(entry, ex) {
   const principals = entry.principal.split('/').map(p => p.trim()).filter(Boolean);
   const recipientEmails = [ex.principal_email, ...(ex.cc_emails || [])].filter(Boolean);
 
+  // Per-document emails go ONLY to the principal(s). OCS submissions are now
+  // batched monthly — see composeMonthlyOcsSubmission() on the Outbox OCS tab.
   const emails = principals.map((name, i) => ({
     to: recipientEmails[i] || ex.principal_email,
     who: name,
     subject: `Notarized: ${entry.document_type} (Doc No. ${docNo}, Book ${entry.book_no})`,
-    body: `Dear ${name.split(' ')[0]},\n\nThank you for your visit today. Please find attached the duly notarized ${entry.document_type}.\n\nRegister entry: Doc. No. ${docNo}, Page No. ${entry.page_no}, Book No. ${entry.book_no}, Series of ${entry.series_year}.\n\nA courtesy copy has been CC'd to the Office of the Clerk of Court — ${state.profile?.jurisdiction || '[OCS]'}, in compliance with the 2004 Notarial Rules.\n\nVery truly yours,\n${state.profile?.full_name || 'Atty. ___'}\nNotary Public${state.profile?.roll_number ? ' · Roll No. ' + state.profile.roll_number : ''}`
+    body: `Dear ${name.split(' ')[0]},\n\nThank you for your visit today. Please find attached the duly notarized ${entry.document_type}.\n\nRegister entry: Doc. No. ${docNo}, Page No. ${entry.page_no}, Book No. ${entry.book_no}, Series of ${entry.series_year}.\n\nA copy of this document will be included in my monthly notarial report to the Office of the Clerk of Court — ${state.profile?.jurisdiction || '[OCS]'}, in compliance with the 2004 Rules on Notarial Practice (as amended by A.M. No. 02-8-13-SC).\n\nVery truly yours,\n${attyName(state.profile) || 'Atty. ___'}\nNotary Public${state.profile?.roll_number ? ' · Roll No. ' + state.profile.roll_number : ''}`
   }));
-
-  if (state.profile?.ocs_email) {
-    emails.push({
-      to: state.profile.ocs_email,
-      who: 'Office of the Clerk of Court',
-      subject: `Notarial Submission: ${entry.document_type} (Doc No. ${docNo}, Book ${entry.book_no})`,
-      body: `To the Honorable Clerk of Court,\n\nGreetings. In compliance with my reportorial obligations as a notary public, I respectfully transmit the attached notarized document for your records:\n\nDocument: ${entry.document_type}\nPrincipal(s): ${entry.principal}\nDoc. No.: ${docNo}\nPage No.: ${entry.page_no}\nBook No.: ${entry.book_no}\nSeries of: ${entry.series_year}\nDate Notarized: ${entry.notarization_date}\n\nVery respectfully,\n${state.profile?.full_name || 'Atty. ___'}\nNotary Public${state.profile?.roll_number ? ' · Roll No. ' + state.profile.roll_number : ''}`
-    });
-  }
 
   state.wizard.dispatchPlan = emails;
 
@@ -917,6 +923,23 @@ async function renderOutbox() {
       : 'Monthly batched submissions to the Office of the Clerk of Court. The Smart-Batch engine (Tier 3) auto-splits attachments under the 25 MB limit.';
   }
 
+  // OCS compose bar — only visible on the OCS tab
+  const ocsBar = document.getElementById('ocs-compose-bar');
+  if (ocsBar) {
+    ocsBar.classList.toggle('hidden', state.outboxTab !== 'ocs');
+    if (state.outboxTab === 'ocs') {
+      const monthInput = document.getElementById('ocs-compose-month');
+      if (monthInput && !monthInput.value) {
+        monthInput.value = new Date().toISOString().slice(0, 7);
+      }
+      const btn = document.getElementById('btn-ocs-compose');
+      if (btn && !btn.dataset.bound) {
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', () => handleComposeOcsSubmission());
+      }
+    }
+  }
+
   try {
     const allRows = await listQueue();
     // Filter client vs OCS by recipient match against profile.ocs_email
@@ -1014,6 +1037,138 @@ async function handleSendOne(id) {
     updateOutboxBadge(await countQueued());
   } catch (e) {
     toast('Send failed: ' + (e.message || e));
+  }
+}
+
+/**
+ * Compose the monthly Notary Report email to OCS, matching the format used by
+ * Atty. Artillero and other Philippine notary publics:
+ *
+ *   NOTARY REPORT OF ATTY. <NAME> FOR <MONTH YEAR> OF BOOK <N> BATCH <K>
+ *   ----
+ *   Notary public: Atty. <NAME>
+ *   Compliance period: <FROM> to <TO>
+ *   Submission of notarial report:
+ *           Doc. No. <FIRST>-<LAST>
+ *           Page No. <FIRST>-<LAST>
+ *           Book No. <BOOK>
+ *           Series of <YEAR>
+ *   Mode of Transmittal: Electronic Mail
+ *   Number of documents or instruments: <COUNT>
+ */
+async function handleComposeOcsSubmission() {
+  const monthInput = document.getElementById('ocs-compose-month');
+  const batchInput = document.getElementById('ocs-compose-batch');
+  const monthStr = (monthInput?.value || '').trim();           // 'YYYY-MM'
+  const batchNo = Number(batchInput?.value || '1') || 1;
+
+  if (!/^\d{4}-\d{2}$/.test(monthStr)) {
+    toast('Pick a compliance month first.');
+    return;
+  }
+  if (!state.profile?.ocs_email) {
+    toast('Set your OCS email in Settings before composing a submission.');
+    return;
+  }
+
+  toast('Building monthly submission…');
+  try {
+    // Pull all register entries for the month
+    const entries = await listEntries({ month: monthStr });
+    if (entries.length === 0) {
+      toast('No notarial entries in that month — nothing to submit.');
+      return;
+    }
+
+    // Sort by doc_no so range math is straightforward
+    entries.sort((a, b) => (a.doc_no || 0) - (b.doc_no || 0));
+
+    const firstDoc = entries[0].doc_no;
+    const lastDoc  = entries[entries.length - 1].doc_no;
+    const pages    = entries.map(e => Number(e.page_no)).filter(Number.isFinite);
+    const firstPage = pages.length ? Math.min(...pages) : entries[0].page_no;
+    const lastPage  = pages.length ? Math.max(...pages) : entries[0].page_no;
+    const books     = [...new Set(entries.map(e => e.book_no).filter(Boolean))];
+    const bookLabel = books.length === 1 ? books[0] : books.join(' & ');
+    const seriesYears = [...new Set(entries.map(e => e.series_year).filter(Boolean))];
+    const seriesYear  = seriesYears.length === 1 ? seriesYears[0] : (seriesYears[0] || new Date(monthStr + '-01').getFullYear());
+
+    // Date range: first to last notarization_date in the month
+    const dates = entries.map(e => e.notarization_date).filter(Boolean).sort();
+    const periodFrom = dates[0] || `${monthStr}-01`;
+    const periodTo   = dates[dates.length - 1] || `${monthStr}-01`;
+
+    const monthName = new Date(monthStr + '-15').toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    const periodFromHuman = new Date(periodFrom).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    const periodToHuman   = new Date(periodTo).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    const notaryProper = attyName(state.profile) || 'Atty. ___';
+    const notaryName  = notaryProper.toUpperCase();
+
+    const docRange  = firstDoc === lastDoc ? String(firstDoc) : `${firstDoc}-${lastDoc}`;
+    const pageRange = firstPage === lastPage ? String(firstPage) : `${String(firstPage).padStart(2, '0')}-${String(lastPage).padStart(2, '0')}`;
+
+    const subject = `NOTARY REPORT OF ${notaryName} FOR ${monthName.toUpperCase()} OF BOOK ${bookLabel} BATCH ${batchNo}`;
+    const body =
+`Notary public: ${notaryProper}
+Compliance period: ${periodFromHuman} to ${periodToHuman}
+Submission of notarial report:
+        Doc. No. ${docRange}
+        Page No. ${pageRange}
+        Book No. ${bookLabel}
+        Series of ${seriesYear}
+Mode of Transmittal: Electronic Mail
+Number of documents or instruments: ${entries.length}
+
+The summary report is attached. The notarized documents covered by this submission have been individually transmitted to the principals on file and remain available for inspection upon request, in compliance with the 2004 Rules on Notarial Practice (as amended by A.M. No. 02-8-13-SC).
+
+Very respectfully,
+${notaryProper}
+Notary Public${state.profile?.roll_number ? ' · Roll No. ' + state.profile.roll_number : ''}${state.profile?.jurisdiction ? '\n' + state.profile.jurisdiction : ''}`;
+
+    // Generate the monthly report PDF and upload it to storage so it can be
+    // attached. The path is namespaced by user id so RLS keeps it private.
+    let attachmentPath = null;
+    try {
+      const report = await generateMonthlyReport({
+        lawyer: state.profile,
+        periodStart: periodFrom,
+        periodEnd: periodTo,
+        entries,
+        returnBlob: true
+      });
+      if (report?.blob) {
+        const user = await getCurrentUser();
+        attachmentPath = `${user.id}/reports/${monthStr}_batch-${batchNo}.pdf`;
+        const { error: upErr } = await supabase.storage
+          .from('notarial-documents')
+          .upload(attachmentPath, report.blob, {
+            contentType: 'application/pdf',
+            upsert: true
+          });
+        if (upErr) {
+          console.warn('Report upload failed, sending email without attachment:', upErr);
+          attachmentPath = null;
+        }
+      }
+    } catch (e) {
+      console.warn('Report generation failed:', e);
+    }
+
+    await queueEmail({
+      recipient: state.profile.ocs_email,
+      subject,
+      body,
+      attachment_path: attachmentPath,
+      register_entry_id: null
+    });
+
+    toast(`OCS submission queued: ${entries.length} docs, ${monthName}.`);
+    await renderOutbox();
+    updateOutboxBadge(await countQueued());
+  } catch (e) {
+    console.error(e);
+    toast('Failed to compose OCS submission: ' + (e.message || e));
   }
 }
 
@@ -1381,7 +1536,7 @@ async function handleAccountDeleteRequest() {
 
 async function handleSaveSettings() {
   const fields = {
-    full_name: readVal('s-full-name', ''),
+    full_name: stripHonorific(readVal('s-full-name', '')),
     roll_number: readVal('s-roll', ''),
     ibp_number: readVal('s-ibp', ''),
     ptr_number: readVal('s-ptr', ''),

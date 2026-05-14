@@ -14,8 +14,11 @@ import { logAudit } from './audit.js';
  * @param {string} opts.periodStart   YYYY-MM-DD
  * @param {string} opts.periodEnd     YYYY-MM-DD (inclusive)
  * @param {Array}  opts.entries       register_entries rows for the period
+ * @param {boolean} [opts.returnBlob] when true, return the PDF as a Blob and
+ *                                    skip the browser download + tracking row.
+ *                                    Used by the OCS submission email flow.
  */
-export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, entries }) {
+export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, entries, returnBlob = false }) {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     throw new Error('jsPDF not loaded. Refresh the page and try again.');
   }
@@ -34,11 +37,15 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
   doc.text(`For the period ${formatLong(periodStart)} to ${formatLong(periodEnd)}`,
     PW / 2, MARGIN + 16, { align: 'center' });
 
-  // Notary block
+  // Notary block. full_name is stored without an honorific — prepend "Atty.".
+  const stripHonorific = (n) => (n || '').replace(/^\s*(Atty\.?|Attorney|Hon\.?)\s+/i, '').trim();
+  const attyFullName = stripHonorific(lawyer.full_name)
+    ? `Atty. ${stripHonorific(lawyer.full_name)}`
+    : (lawyer.full_name || '');
   let y = MARGIN + 44;
   doc.setFontSize(9);
   const notaryLines = [
-    `Notary Public: ${lawyer.full_name || ''}`,
+    `Notary Public: ${attyFullName}`,
     `Roll of Attorneys No.: ${lawyer.roll_number || '—'}    IBP No.: ${lawyer.ibp_number || '—'}`,
     `PTR No.: ${lawyer.ptr_number || '—'}    MCLE Compliance No.: ${lawyer.mcle_number || '—'}`,
     `Territorial Jurisdiction: ${lawyer.jurisdiction || '—'}`,
@@ -46,12 +53,10 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
   ];
   notaryLines.forEach(line => { doc.text(line, MARGIN, y); y += 13; });
 
-  // Summary stats
+  // Summary stats — notarial fees are confidential and intentionally omitted.
   y += 8;
-  const totalFees = entries.reduce((s, r) => s + (Number(r.fee) || 0), 0);
   doc.setFont('helvetica', 'bold');
   doc.text(`Total entries: ${entries.length}`, MARGIN, y);
-  doc.text(`Total notarial fees: PHP ${totalFees.toFixed(2)}`, MARGIN + 220, y);
 
   // Entries table — sorted chronologically, then by doc_no, for the official report
   const sorted = [...entries].sort((a, b) => {
@@ -59,7 +64,7 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
     if (d !== 0) return d;
     return (a.doc_no || 0) - (b.doc_no || 0);
   });
-  const head = [['Doc No.', 'Date', 'Document Type', 'Notarial Act', 'Principal(s)', 'Page', 'Book', 'Fee (PHP)']];
+  const head = [['Doc No.', 'Date', 'Document Type', 'Notarial Act', 'Principal(s)', 'Page', 'Book']];
   const rows = sorted.map(r => [
     `${r.series_year}-${pad3(r.doc_no)}`,
     r.notarization_date,
@@ -67,8 +72,7 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
     r.notarial_act || '',
     r.principal || '',
     String(r.page_no),
-    r.book_no || '',
-    Number(r.fee || 0).toFixed(2)
+    r.book_no || ''
   ]);
 
   // jsPDF-AutoTable
@@ -82,8 +86,7 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
     columnStyles: {
       0: { cellWidth: 60, fontStyle: 'bold', textColor: [70, 37, 138] },
       1: { cellWidth: 60 },
-      4: { cellWidth: 140 },
-      7: { halign: 'right' }
+      4: { cellWidth: 140 }
     }
   });
 
@@ -104,13 +107,19 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
   const sigY = fy + split.length * 12 + 36;
   doc.text('_______________________________', MARGIN, sigY);
   doc.setFont('helvetica', 'bold');
-  doc.text(lawyer.full_name || 'Notary Public', MARGIN, sigY + 14);
+  doc.text(attyFullName || 'Notary Public', MARGIN, sigY + 14);
   doc.setFont('helvetica', 'normal');
   doc.text(`Notary Public${lawyer.roll_number ? ' · Roll No. ' + lawyer.roll_number : ''}`, MARGIN, sigY + 26);
   doc.text(`Date generated: ${new Date().toLocaleDateString('en-PH', { dateStyle: 'long' })}`, MARGIN, sigY + 40);
 
-  // Save
   const filename = `NotariPro_Notarial-Report_${periodStart}_to_${periodEnd}.pdf`;
+
+  // OCS submission flow: hand back a Blob instead of triggering a download.
+  if (returnBlob) {
+    return { blob: doc.output('blob'), filename, entryCount: entries.length };
+  }
+
+  // Save
   doc.save(filename);
 
   // Persist a tracking row (best-effort)
@@ -122,13 +131,13 @@ export async function generateMonthlyReport({ lawyer, periodStart, periodEnd, en
       entry_count: entries.length
     });
     await logAudit('report_generated',
-      { period_start: periodStart, period_end: periodEnd, entry_count: entries.length, total_fees: totalFees },
+      { period_start: periodStart, period_end: periodEnd, entry_count: entries.length },
       { type: 'notarial_report' });
   } catch (e) {
     console.warn('[reports] tracking insert failed (non-fatal):', e?.message || e);
   }
 
-  return { filename, entryCount: entries.length, totalFees };
+  return { filename, entryCount: entries.length };
 }
 
 function pad3(n) { return String(n).padStart(3, '0'); }

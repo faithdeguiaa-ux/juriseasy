@@ -79,12 +79,13 @@ export async function createEntry(input) {
   const bookNo     = (input.override_book_no || '').trim() || profile.current_book_no || 'I';
   const seriesYear = Number.isFinite(overrideYear) && overrideYear > 1900 ? overrideYear : (profile.series_year || new Date().getFullYear());
   const pattern    = profile.filename_pattern ||
-    '{date}_{type}_{principal}_Doc-{doc_no}_Page-{page}_Book{book}_{year}.pdf';
+    '{doc_no}_{date}_{type}_{initials}.pdf';
 
   const filename = generateFilename(pattern, {
     date: input.notarization_date,
     type: tokenize(input.document_type),
     principal: tokenize(firstPrincipal(input.principal)),
+    initials: initials(firstPrincipal(input.principal)),
     doc_no: String(nextDocNo).padStart(3, '0'),
     page: nextPageNo,
     book: bookNo,
@@ -138,7 +139,12 @@ export async function createEntry(input) {
 
   await logAudit(
     'register_entry_created',
-    { doc_no: nextDocNo, page_no: nextPageNo, book_no: bookNo, document_type: input.document_type },
+    {
+      doc_no: nextDocNo, page_no: nextPageNo, book_no: bookNo,
+      document_type: input.document_type,
+      // IBP Roll No. is captured here (audit/history) rather than as a wizard field.
+      ...(input.ibp_roll_number ? { ibp_roll_number: input.ibp_roll_number } : {})
+    },
     { type: 'register_entry', id: created.id }
   );
 
@@ -166,12 +172,13 @@ export async function previewNextEntry(input) {
   const bookNo     = profile.current_book_no || 'I';
   const seriesYear = profile.series_year     || new Date().getFullYear();
   const pattern    = profile.filename_pattern ||
-    '{date}_{type}_{principal}_Doc-{doc_no}_Page-{page}_Book{book}_{year}.pdf';
+    '{doc_no}_{date}_{type}_{initials}.pdf';
 
   const filename = generateFilename(pattern, {
     date: input.notarization_date,
     type: tokenize(input.document_type),
     principal: tokenize(firstPrincipal(input.principal)),
+    initials: initials(firstPrincipal(input.principal)),
     doc_no: String(nextDocNo).padStart(3, '0'),
     page: nextPageNo,
     book: bookNo,
@@ -236,6 +243,23 @@ function tokenize(s) {
 
 function firstPrincipal(s) {
   return (s || '').split('/')[0].trim();
+}
+
+/**
+ * Initials of a person's full name. Strips punctuation, treats hyphens like
+ * spaces, takes the first letter of each remaining word.
+ * Examples:
+ *   "Hans Juris A. Artillero"  -> "HJAA"
+ *   "Maria Santos-Reyes"        -> "MSR"
+ *   "JUAN DELA CRUZ"            -> "JDC"
+ */
+function initials(s) {
+  return (s || '')
+    .replace(/[^A-Za-z\s\-]/g, '')
+    .split(/[\s\-]+/)
+    .filter(Boolean)
+    .map(w => w[0].toUpperCase())
+    .join('');
 }
 
 function generateFilename(pattern, tokens) {
