@@ -434,7 +434,7 @@ function populateExtractedFields(ex) {
   // Identification
   setVal('ext-type', ex.document_type);
   setVal('ext-act', ex.notarial_act);
-  setVal('ext-fee', Number(ex.fee || 0).toFixed(2));
+  // Notarial fee field removed from the wizard — confidential per Faith.
   setVal('ext-summary', ex.summary || '');
 
   // Affiant — auto-detect single vs multiple based on presence of " / "
@@ -557,7 +557,9 @@ async function handleCommitRegister() {
   ex.document_type = readVal('reg-type-input', readVal('ext-type', ex.document_type));
   ex.notarial_act = readVal('reg-act-input', readVal('ext-act', ex.notarial_act));
   ex.summary = readVal('ext-summary', ex.summary || '');
-  ex.fee = Number(readVal('reg-fee-input', readVal('ext-fee', ex.fee)));
+  // Fee is no longer editable in the wizard. Keep whatever OCR extracted
+  // (often 0) so the DB column has a value; the report PDF + UI hide it.
+  ex.fee = Number(ex.fee || 0);
   // Date + principal may have been edited in step 3 — take those if non-empty
   const step3Date = readVal('reg-date-input', '');
   const step3Principal = readVal('reg-principal-input', '');
@@ -626,7 +628,6 @@ function paintRegisterPreview(entry) {
   setText('reg-date', entry.notarization_date);
   setText('reg-principal', entry.principal);
   setText('reg-type', entry.document_type);
-  setText('reg-fee-display', '₱' + Number(entry.fee).toFixed(2));
   setText('filename-preview', entry.filename);
 }
 
@@ -717,7 +718,6 @@ async function populateStep3Preview() {
   const docType = readVal('ext-type', ex.document_type || '');
   const notarialAct = readVal('ext-act', ex.notarial_act || ex.notarial_act || 'Jurat');
   const noteDate = readVal('ext-date', ex.jurat_date || ex.notarization_date || '');
-  const fee = Number(readVal('ext-fee', ex.fee || 0));
   const affNames = Array.from(document.querySelectorAll('[data-affiant-name]'))
     .map(el => el.value.trim()).filter(Boolean);
   const principal = affNames.length > 0 ? affNames.join(' / ') : (ex.principal || '');
@@ -727,7 +727,6 @@ async function populateStep3Preview() {
   setVal('reg-principal-input', principal);
   setVal('reg-type-input', docType);
   setVal('reg-act-input', notarialAct);
-  setVal('reg-fee-input', Number.isFinite(fee) ? fee.toFixed(2) : '0.00');
 
   try {
     const preview = await previewNextEntry({
